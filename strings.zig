@@ -93,12 +93,17 @@ pub const String = struct {
     }
 
     /// Returns Owned slice of String contents, including null terminator
-    /// String is reset at this point
+    /// String is reset at this point and no longer tracks the slice
     pub fn toOwnedSlice(self: *String) []const u8 {
         const ret = self.bytes;
         self.bytes = "";
         self.allocator = null;
         return ret;
+    }
+
+    /// Returns a [*]const u8 of the string, can be passed to c functions
+    pub fn cstr(self: *const String) [*]const u8 {
+        return self.bytes.ptr;
     }
 
     /// Compares two strings
