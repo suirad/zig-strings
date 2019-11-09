@@ -284,4 +284,5 @@ test "String concatenation" {
     str1.deinit();
     str2.deinit();
     str3.deinit();
+    str4.deinit();
 }
