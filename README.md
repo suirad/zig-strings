@@ -1,2 +1,2 @@
 # Zig-Strings
-A WIP string library for the Zig language.
+A String library for the Zig language. See tests for examples of use.
