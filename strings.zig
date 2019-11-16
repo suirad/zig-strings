@@ -2,34 +2,51 @@ const std = @import("std");
 const debug = std.debug;
 const mem = std.mem;
 const testing = std.testing;
+const Allocator = mem.Allocator;
+const ArrayList = std.ArrayList;
 
 /// String struct; compatible with c-style strings
 pub const String = struct {
     bytes: []const u8 = "\x00",
-    allocator: ?*std.mem.Allocator = null,
+    allocator: ?*Allocator = null,
 
     // Initialization
 
     /// Init with const []u8 slice; Slice must end with a null;
-    pub fn init(slice: []const u8) String {
-        debug.assert(slice.len > 0);
-        debug.assert(slice[slice.len - 1] == 0);
+    pub fn init(slice: []const u8) !String {
+        if (slice.len == 0) {
+            return error.EmptySlice;
+        }
+        if (slice[slice.len - 1] != 0) {
+            return error.NotNullTerminated;
+        }
         return String{ .bytes = slice };
     }
 
     /// Meant to be compatible with c"" text
-    pub fn initCstr(ptr: [*]const u8) String {
-        const result = ptr[0 .. mem.len(u8, ptr) + 1];
-        debug.assert(result.len > 0);
-        debug.assert(result[result.len - 1] == 0);
+    pub fn initCstr(ptr: [*]const u8) !String {
+        const length = mem.len(u8, ptr);
+        if (length == 0) {
+            return error.EmptySlice;
+        }
+
+        const result = ptr[0 .. length + 1];
+        if (result[result.len - 1] != 0) {
+            return error.NotNullTerminated;
+        }
+
         return String{ .bytes = result };
     }
 
     /// Init with pre allocated []u8
     /// String assumes ownership and will free given []u8 with given allocator
-    pub fn fromOwnedSlice(alloc: *mem.Allocator, slice: []u8) String {
-        debug.assert(slice.len > 0);
-        debug.assert(slice[slice.len - 1] == 0);
+    pub fn fromOwnedSlice(alloc: *Allocator, slice: []u8) !String {
+        if (slice.len == 0) {
+            return error.EmptySlice;
+        }
+        if (slice[slice.len - 1] != 0) {
+            return error.NotNullTerminated;
+        }
         return String{
             .bytes = slice,
             .allocator = alloc,
@@ -37,7 +54,7 @@ pub const String = struct {
     }
 
     /// Init with given slice, copied using given allocator
-    pub fn fromSlice(alloc: *mem.Allocator, slice: []const u8) !String {
+    pub fn fromSlice(alloc: *Allocator, slice: []const u8) !String {
         if (slice.len == 0) {
             return error.EmptySlice;
         }
@@ -57,7 +74,7 @@ pub const String = struct {
     }
 
     /// Init with given String, copied using given allocator
-    pub fn initCopy(alloc: *mem.Allocator, other: *const String) !String {
+    pub fn initCopy(alloc: *Allocator, other: *const String) !String {
         return try fromSlice(alloc, other.bytes);
     }
 
@@ -76,6 +93,13 @@ pub const String = struct {
     pub fn deinitComptime(self: *const String) void {
         if (self.allocator) |alloc| {
             alloc.free(self.bytes);
+        }
+    }
+
+    pub fn deinitArrayList(list: ArrayList(String)) void {
+        defer list.deinit();
+        for (list.toSlice()) |*str| {
+            str.deinit();
         }
     }
 
@@ -133,7 +157,7 @@ pub const String = struct {
     }
 
     /// Duplicate a string
-    pub fn dup(self: *const String) !String {
+    pub fn dupe(self: *const String) !String {
         if (self.allocator) |alloc| {
             return fromSlice(alloc, self.bytes);
         }
@@ -141,7 +165,7 @@ pub const String = struct {
     }
 
     /// Duplicate a string, with a specific allocator
-    pub fn dupWith(self: *const String, alloc: *mem.Allocator) !String {
+    pub fn dupeWith(self: *const String, alloc: *Allocator) !String {
         return fromSlice(alloc, self.bytes);
     }
 
@@ -159,7 +183,7 @@ pub const String = struct {
     }
 
     /// Concat a string and a slice, using the given allocator
-    pub fn concatSliceWithAllocator(self: *const String, slice: []const u8, alloc: *mem.Allocator) !String {
+    pub fn concatSliceWithAllocator(self: *const String, slice: []const u8, alloc: *Allocator) !String {
         const newlen = self.len() + slice.len;
         const result = try alloc.alloc(u8, newlen + 1);
         mem.copy(u8, result, self.bytes);
@@ -171,13 +195,104 @@ pub const String = struct {
         };
     }
 
-    pub fn find() void {}
+    /// Find a string within a given string
+    pub fn find(self: *const String, other: String) ?usize {
+        return self.findSlice(other.bytes);
+    }
 
-    pub fn split() void {}
+    /// Find a slice within a given string
+    pub fn findSlice(self: *const String, slice: []const u8) ?usize {
+        return mem.indexOf(u8, self.bytes, slice);
+    }
 
-    pub fn splitAt() void {}
+    /// Split string on a space
+    pub fn split(self: *const String) !ArrayList(String) {
+        return self.splitAt(" ");
+    }
 
-    pub fn join() void {}
+    /// Split string on given slice
+    pub fn splitAt(self: *const String, slice: []const u8) !ArrayList(String) {
+        if (slice.len == 0) {
+            return error.EmptySlice;
+        }
+        if (self.allocator) |alloc| {
+            return self.splitWithAllocator(slice, alloc);
+        }
+        return error.NoAllocator;
+    }
+
+    /// Split on given slice using given allocator
+    pub fn splitWithAllocator(self: *const String, slice: []const u8, alloc: *Allocator) !ArrayList(String) {
+        if (slice.len == 0) {
+            return error.EmptySlice;
+        }
+
+        var selfitr = self.toSlice();
+        var index = mem.indexOf(u8, selfitr, slice);
+        if (index == null) {
+            return error.SliceNotFound;
+        }
+
+        var list = ArrayList(String).init(alloc);
+        errdefer list.deinit();
+
+        while (index != null) : ({
+            selfitr = selfitr[index.? + slice.len .. selfitr.len];
+            index = mem.indexOf(u8, selfitr, slice);
+        }) {
+            const part = selfitr[0..index.?];
+            if (part.len > 0) {
+                const substr = try String.fromSlice(alloc, part);
+                try list.append(substr);
+            }
+        }
+        if (selfitr.len > 0) {
+            const substr = try String.fromSlice(alloc, selfitr);
+            try list.append(substr);
+        }
+
+        return list;
+    }
+
+    /// Join an ArrayList of strings into a single string with a delimiter
+    /// Uses the list's allocator
+    pub fn join(list: ArrayList(String), delim: []const u8) !String {
+        return String.joinWith(list.allocator, list, delim);
+    }
+
+    /// Join an ArrayList of strings into a single string with a delimiter
+    /// Uses the given allocator
+    pub fn joinWith(alloc: *Allocator, list: ArrayList(String), delim: []const u8) !String {
+        var total_len: usize = 0;
+        const lslice = list.toSlice();
+        for (lslice) |str, i| {
+            total_len += str.len();
+            if (i > 0 and i != list.len) {
+                total_len += delim.len;
+            }
+        }
+
+        const result = try alloc.alloc(u8, total_len + 1);
+        errdefer alloc.free(result);
+        result[total_len] = 0;
+
+        var index: usize = 0;
+        for (lslice) |str, i| {
+            if (delim.len > 0 and i > 0 and i != list.len) {
+                mem.copy(u8, result[index..], delim);
+                index += delim.len;
+            }
+
+            const sslice = str.toSlice();
+            mem.copy(u8, result[index..], sslice);
+            index += sslice.len;
+        }
+
+        return String{
+            .bytes = result,
+            .allocator = alloc,
+        };
+    }
 };
 
 test "string initialization" {
@@ -189,14 +304,14 @@ test "string initialization" {
 
     // init with string, manually terminated
     const raw_str2 = "String2\x00";
-    var str2 = String.init(raw_str2);
+    var str2 = try String.init(raw_str2);
     defer str2.deinit();
     testing.expect(str2.len() == 7);
     // check null terminator
     testing.expect(str2.bytes[str2.len()] == 0);
 
     const raw_str3 = c"String3";
-    var str3 = String.initCstr(raw_str3);
+    var str3 = try String.initCstr(raw_str3);
     defer str3.deinit();
     testing.expect(str3.len() == 7);
     // check null terminator
@@ -212,7 +327,7 @@ test "string initialization" {
     // init from preallocated owned slice
     const msg = try allocator.alloc(u8, 8);
     mem.copy(u8, msg, "String5\x00");
-    var str5 = String.fromOwnedSlice(allocator, msg);
+    var str5 = try String.fromOwnedSlice(allocator, msg);
     defer str5.deinit();
 
     // init copy of other string
@@ -220,14 +335,12 @@ test "string initialization" {
     defer str6.deinit();
 }
 
-// test comptime string
-
 test "to Owned slice" {
     const alloc = std.heap.direct_allocator;
 
     const buf = try alloc.alloc(u8, 10);
     buf[9] = 0;
-    var str = String.fromOwnedSlice(alloc, buf);
+    var str = try String.fromOwnedSlice(alloc, buf);
     const buf2 = str.toOwnedSlice();
     defer alloc.free(buf2);
 
@@ -240,10 +353,10 @@ test "String compare and equals" {
     const alloc = std.heap.direct_allocator;
 
     var str1 = try String.fromSlice(alloc, "CompareMe");
-    defer str1.deinit();
     var str2 = try String.fromSlice(alloc, "CompareMe");
-    defer str2.deinit();
     var str3 = try String.fromSlice(alloc, "COMPAREME");
+    defer str1.deinit();
+    defer str2.deinit();
     defer str3.deinit();
 
     // test cmp
@@ -262,8 +375,8 @@ test "String duplication" {
     const alloc = std.heap.direct_allocator;
 
     var str1 = try String.fromSlice(alloc, "Dupe me");
+    var str2 = try str1.dupe();
     defer str1.deinit();
-    var str2 = try str1.dup();
     defer str2.deinit();
 
     testing.expect(str1.eql(str2));
@@ -285,4 +398,73 @@ test "String concatenation" {
     str2.deinit();
     str3.deinit();
     str4.deinit();
+}
+
+test "String finding" {
+    const alloc = std.heap.direct_allocator;
+    var str = try String.fromSlice(alloc, "The cow jumped over the moon.");
+    var str2 = try String.fromSlice(alloc, "moon.");
+    defer str.deinit();
+    defer str.deinit();
+
+    testing.expect(str.findSlice("The").? == 0);
+    testing.expect(str.findSlice("the").? == 20);
+    testing.expect(str.findSlice("cat") == null);
+    testing.expect(str.find(str2).? == 24);
+}
+
+test "String Splitting" {
+    const alloc = std.heap.direct_allocator;
+    var str = try String.fromSlice(alloc, " Please Split me 5 times ");
+    defer str.deinit();
+
+    testing.expectError(error.EmptySlice, str.splitAt(""));
+    testing.expectError(error.SliceNotFound, str.splitAt("Blah"));
+    var splitstr: ArrayList(String) = try str.split();
+    defer String.deinitArrayList(splitstr);
+
+    for (splitstr.toSlice()) |val, i| {
+        switch (i) {
+            0 => testing.expect(val.eqlSlice("Please")),
+            1 => testing.expect(val.eqlSlice("Split")),
+            2 => testing.expect(val.eqlSlice("me")),
+            3 => testing.expect(val.eqlSlice("5")),
+            4 => testing.expect(val.eqlSlice("times")),
+            else => return error.BadIndex,
+        }
+    }
+
+    var str2 = try String.fromSlice(alloc, "Thic|=|Splitting");
+    defer str2.deinit();
+
+    var splitstr2 = try str2.splitAt("|=|");
+    defer String.deinitArrayList(splitstr2);
+
+    testing.expect(splitstr2.at(0).eqlSlice("Thic"));
+    testing.expect(splitstr2.at(1).eqlSlice("Splitting"));
+}
+
+test "String Joining" {
+    const alloc = std.heap.direct_allocator;
+    var list = ArrayList(String).init(alloc);
+    defer String.deinitArrayList(list);
+
+    var str1 = try String.fromSlice(alloc, "Hello");
+    var str2 = try String.fromSlice(alloc, "New");
+    var str3 = try String.fromSlice(alloc, "World!");
+
+    try list.append(str1);
+    try list.append(str2);
+    try list.append(str3);
+
+    var jstr1 = try String.join(list, " ");
+    var jstr2 = try String.join(list, "");
+    var jstr3 = try String.join(list, "===");
+    defer jstr1.deinit();
+    defer jstr2.deinit();
+    defer jstr3.deinit();
+
+    testing.expect(jstr1.eqlSlice("Hello New World!"));
+    testing.expect(jstr2.eqlSlice("HelloNewWorld!"));
+    testing.expect(jstr3.eqlSlice("Hello===New===World!"));
 }
