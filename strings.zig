@@ -133,27 +133,23 @@ pub const String = struct {
     /// Compares two strings
     /// Return values are -1, 0, 1
     /// Target String only considers content and not trailing null
-    pub fn cmp(self: *const String, other: String) i8 {
+    pub fn cmp(self: *const String, other: String) mem.Compare {
         return self.cmpSlice(other.bytes[0..other.len()]);
     }
 
     /// Compares a slice to a string
     /// String only considers content and not trailing null
-    pub fn cmpSlice(self: *const String, slice: []const u8) i8 {
-        return switch (mem.compare(u8, self.bytes[0..self.len()], slice)) {
-            mem.Compare.Equal => 0,
-            mem.Compare.GreaterThan => 1,
-            mem.Compare.LessThan => -1,
-        };
+    pub fn cmpSlice(self: *const String, slice: []const u8) mem.Compare {
+        return mem.compare(u8, self.bytes[0..self.len()], slice);
     }
 
     /// Checks for string equality
     pub fn eql(self: *const String, slice: String) bool {
-        return if (self.cmp(slice) == 0) true else false;
+        return if (self.cmp(slice) == mem.Compare.Equal) true else false;
     }
 
     pub fn eqlSlice(self: *const String, other: []const u8) bool {
-        return if (self.cmpSlice(other) == 0) true else false;
+        return if (self.cmpSlice(other) == mem.Compare.Equal) true else false;
     }
 
     /// Duplicate a string
@@ -360,10 +356,10 @@ test "String compare and equals" {
     defer str3.deinit();
 
     // test cmp
-    testing.expect(str1.cmpSlice("CompareMe") == 0);
-    testing.expect(str1.cmp(str2) == 0);
-    testing.expect(str1.cmpSlice("COMPAREME") == 1);
-    testing.expect(str1.cmp(str3) == 1);
+    testing.expect(str1.cmpSlice("CompareMe") == mem.Compare.Equal);
+    testing.expect(str1.cmp(str2) == mem.Compare.Equal);
+    testing.expect(str1.cmpSlice("COMPAREME") == mem.Compare.GreaterThan);
+    testing.expect(str1.cmp(str3) == mem.Compare.GreaterThan);
 
     // test eql
     testing.expect(str1.eqlSlice("CompareMe"));
